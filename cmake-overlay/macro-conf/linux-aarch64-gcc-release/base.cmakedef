@@ -3,6 +3,12 @@ import <support/platform/linux-aarch64/base>
 # Import GCC Configuration
 import <support/compiler/gcc/linux/base>
 
+# AArch64 GCC has no libquadmath.  Use the same approximation strategy as the
+# Linux release config: keep __float128 as the host FP value and approximate
+# conversions via the 128-bit long double.
+USE_QUADMATH_LIBRARY=0
+APPROXIMATE_QUADMATH=1
+
 # Import Simple Release Configuration
 import <support/simple-conf/release/base>
 

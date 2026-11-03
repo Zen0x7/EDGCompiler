@@ -35,6 +35,7 @@ jobs:
             rt_libs: linux_x86_64
             target: linux_x86_64
             overlay: false
+            extra_cmake_flags: ""
           - runner: ubuntu-24.04-arm
             arch: arm64
             asset: edg-linux-arm64.tar.gz
@@ -42,6 +43,7 @@ jobs:
             rt_libs: linux_aarch64
             target: linux_aarch64
             overlay: true
+            extra_cmake_flags: "-DCMAKE_C_FLAGS=-D__float128=_Float128 -DCMAKE_CXX_FLAGS=-D__float128=_Float128"
     env:
       EDG_REF: ${{ inputs.edg_ref || vars.EDG_REF || 'main' }}
     steps:
@@ -65,23 +67,32 @@ jobs:
         if: ${{ matrix.overlay }}
         run: cp -a cmake-overlay/macro-conf/. edgcpp-compiler/cmake/macro-conf/
 
+      - name: Prepare EDG base config
+        run: |
+          rm -rf .edg-base
+          mkdir -p .edg-base
+          cp edgcpp-compiler/bases/docker/dev-env/gcc/edg_eccp_config .edg-base/edg_eccp_config
+          cp -a edgcpp-compiler/bases/docker/dev-env/gcc/lib .edg-base/lib
+          ln -s "$PWD/edgcpp-compiler/include_c++" .edg-base/include
+          if [ "${{ matrix.overlay }}" = "true" ]; then
+            printf '\nEDG_C_TO_OBJ_DEFAULT_OPTIONS_linux_aarch64="$EDG_C_TO_OBJ_DEFAULT_OPTIONS_linux_aarch64 -D__float128=_Float128"\n' >> .edg-base/edg_eccp_config
+          fi
+
       - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             ca-certificates cmake curl g++ gcc gzip ninja-build python3 tar
-          gcc_major="$(gcc -dumpversion | cut -d. -f1)"
-          sudo apt-get install -y --no-install-recommends \
-            "libgcc-${gcc_major}-dev" "libstdc++-${gcc_major}-dev"
 
       - name: Configure
         working-directory: edgcpp-compiler
         env:
-          EDG_BASE: ${{ github.workspace }}/edgcpp-compiler/bases/docker/dev-env/gcc
+          EDG_BASE: ${{ github.workspace }}/.edg-base
         run: |
           cmake --preset linux-gcc-release \
             -DEDG_MACRO_CONF=${{ matrix.macro_conf }} \
-            -DEDG_CPP_RT_LIBS=${{ matrix.rt_libs }}
+            -DEDG_CPP_RT_LIBS=${{ matrix.rt_libs }} \
+            ${{ matrix.extra_cmake_flags }}
 
       - name: Build
         working-directory: edgcpp-compiler
