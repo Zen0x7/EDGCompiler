@@ -79,8 +79,10 @@ jobs:
           mkdir -p .edg-base
           cp edgcpp-compiler/bases/docker/dev-env/gcc/edg_eccp_config .edg-base/edg_eccp_config
           cp -a edgcpp-compiler/bases/docker/dev-env/gcc/lib .edg-base/lib
+          cp -a edgcpp-compiler/bases/docker/dev-env/gcc/lib_linux_* .edg-base/
           ln -s "$PWD/edgcpp-compiler/include_c++" .edg-base/include
           if [ "${{ matrix.overlay }}" = "true" ]; then
+            printf '\nEDG_C_TO_OBJ_DEFAULT_OPTIONS="$EDG_C_TO_OBJ_DEFAULT_OPTIONS -D__float128=_Float128"\n' >> .edg-base/edg_eccp_config
             printf '\nEDG_C_TO_OBJ_DEFAULT_OPTIONS_linux_aarch64="$EDG_C_TO_OBJ_DEFAULT_OPTIONS_linux_aarch64 -D__float128=_Float128"\n' >> .edg-base/edg_eccp_config
           fi
           gcc_version="$(gcc -dumpfullversion 2>/dev/null || gcc -dumpversion)"

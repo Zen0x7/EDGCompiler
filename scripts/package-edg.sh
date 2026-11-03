@@ -92,6 +92,7 @@ cp -a "$SRC/include_c++" "$PKG/include"
 cp -a "$SRC/include_c99" "$PKG/include_c99"
 if [ "$TARGET" = "linux_aarch64" ]; then
   cp "$SRC/bases/docker/dev-env/gcc/edg_eccp_config" "$PKG/edg_eccp_config"
+  printf '\nEDG_C_TO_OBJ_DEFAULT_OPTIONS="$EDG_C_TO_OBJ_DEFAULT_OPTIONS -D__float128=_Float128"\n' >> "$PKG/edg_eccp_config"
   printf '\nEDG_C_TO_OBJ_DEFAULT_OPTIONS_linux_aarch64="$EDG_C_TO_OBJ_DEFAULT_OPTIONS_linux_aarch64 -D__float128=_Float128"\n' >> "$PKG/edg_eccp_config"
   chmod 0444 "$PKG/edg_eccp_config"
 else

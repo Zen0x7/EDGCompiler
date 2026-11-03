@@ -8,6 +8,7 @@ import <support/compiler/gcc/linux/base>
 # conversions via the 128-bit long double.
 USE_QUADMATH_LIBRARY=0
 APPROXIMATE_QUADMATH=1
+FLOAT80_ENABLING_POSSIBLE=0
 
 # Import Simple Release Configuration
 import <support/simple-conf/release/base>
