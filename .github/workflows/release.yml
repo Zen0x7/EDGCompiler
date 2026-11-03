@@ -67,6 +67,12 @@ jobs:
         if: ${{ matrix.overlay }}
         run: cp -a cmake-overlay/macro-conf/. edgcpp-compiler/cmake/macro-conf/
 
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ca-certificates cmake curl g++ gcc gzip ninja-build python3 tar
+
       - name: Prepare EDG base config
         run: |
           rm -rf .edg-base
@@ -77,12 +83,10 @@ jobs:
           if [ "${{ matrix.overlay }}" = "true" ]; then
             printf '\nEDG_C_TO_OBJ_DEFAULT_OPTIONS_linux_aarch64="$EDG_C_TO_OBJ_DEFAULT_OPTIONS_linux_aarch64 -D__float128=_Float128"\n' >> .edg-base/edg_eccp_config
           fi
-
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            ca-certificates cmake curl g++ gcc gzip ninja-build python3 tar
+          gcc_version="$(gcc -dumpfullversion 2>/dev/null || gcc -dumpversion)"
+          IFS=. read -r major minor patch <<< "$gcc_version"
+          edg_gcc_ver=$((10#${major:-0} * 10000 + 10#${minor:-0} * 100 + 10#${patch:-0}))
+          echo "EDG_GCC_VER_SCRAPE=$edg_gcc_ver" >> "$GITHUB_ENV"
 
       - name: Configure
         working-directory: edgcpp-compiler
