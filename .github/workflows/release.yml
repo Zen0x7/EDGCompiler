@@ -1,0 +1,168 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to create or update (created from the current commit if missing).
+        required: true
+      edg_ref:
+        description: edgcpp/compiler ref to build (branch, tag or commit).
+        required: false
+        default: main
+
+permissions:
+  contents: write
+
+env:
+  EDG_REPOSITORY: edgcpp/compiler
+
+jobs:
+  build:
+    name: build ${{ matrix.asset }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x64
+            asset: edg-linux-x64.tar.gz
+            macro_conf: linux-gcc-release
+            rt_libs: linux_x86_64
+            target: linux_x86_64
+            overlay: false
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+            asset: edg-linux-arm64.tar.gz
+            macro_conf: linux-aarch64-gcc-release
+            rt_libs: linux_aarch64
+            target: linux_aarch64
+            overlay: true
+    env:
+      EDG_REF: ${{ inputs.edg_ref || vars.EDG_REF || 'main' }}
+    steps:
+      - name: Checkout this repository
+        uses: actions/checkout@v4
+
+      - name: Checkout EDG
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.EDG_REPOSITORY }}
+          ref: ${{ env.EDG_REF }}
+          path: edgcpp-compiler
+          fetch-depth: 1
+
+      - name: Resolve EDG commit
+        id: edg_sha
+        working-directory: edgcpp-compiler
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Apply linux-aarch64 macro-conf overlay
+        if: ${{ matrix.overlay }}
+        run: cp -a cmake-overlay/macro-conf/. edgcpp-compiler/cmake/macro-conf/
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ca-certificates cmake curl g++ gcc gzip ninja-build python3 tar
+
+      - name: Configure
+        working-directory: edgcpp-compiler
+        run: |
+          cmake --preset linux-gcc-release \
+            -DEDG_MACRO_CONF=${{ matrix.macro_conf }} \
+            -DEDG_CPP_RT_LIBS=${{ matrix.rt_libs }}
+
+      - name: Build
+        working-directory: edgcpp-compiler
+        run: ninja -j4 -C build/gcc-release
+
+      - name: Package
+        env:
+          EDG_REPOSITORY: https://github.com/${{ env.EDG_REPOSITORY }}
+          EDG_REF: ${{ env.EDG_REF }}
+          EDG_SHA: ${{ steps.edg_sha.outputs.sha }}
+        run: |
+          scripts/package-edg.sh \
+            --source edgcpp-compiler \
+            --build edgcpp-compiler/build/gcc-release \
+            --target ${{ matrix.target }} \
+            --asset ${{ matrix.asset }} \
+            --output "dist/${{ matrix.asset }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: edg-${{ matrix.arch }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout this repository
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: edg-*
+          path: dist
+          merge-multiple: true
+
+      - name: Generate checksums
+        working-directory: dist
+        run: |
+          rm -f SHA256SUMS
+          sha256sum edg-linux-*.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_EDG_REF: ${{ inputs.edg_ref || vars.EDG_REF || 'main' }}
+        run: |
+          set -euo pipefail
+
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            tag="$INPUT_TAG"
+          else
+            tag="$GITHUB_REF_NAME"
+          fi
+
+          case "$tag" in
+            ""|*[!A-Za-z0-9._-]*)
+              echo "::error::Invalid release tag: $tag"
+              exit 1
+              ;;
+          esac
+
+          {
+            echo "EDG front-end binaries for Linux x64 and arm64."
+            echo
+            echo "Built from https://github.com/${EDG_REPOSITORY} @ ${INPUT_EDG_REF}."
+            echo
+            echo "License: Apache-2.0 with LLVM exceptions. See LICENSE.txt inside the archives."
+            echo
+            echo "SHA256SUMS is provided for verification."
+          } > release-notes.md
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/* --clobber
+            gh release edit "$tag" --notes-file release-notes.md
+          else
+            gh release create "$tag" dist/* \
+              --title "$tag" \
+              --notes-file release-notes.md \
+              --target "$GITHUB_SHA"
+          fi

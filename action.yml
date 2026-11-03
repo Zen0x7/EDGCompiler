@@ -1,0 +1,190 @@
+name: Setup EDG Compiler
+description: Install prebuilt EDG front-end binaries and optionally run one.
+author: Zen0x7
+
+inputs:
+  release:
+    description: Release tag to download assets from (or "latest").
+    required: false
+    default: latest
+  repository:
+    description: GitHub repository hosting the EDG release assets.
+    required: false
+    default: Zen0x7/EDGCompiler
+  system-headers:
+    description: Use the host GCC C/C++ include paths instead of EDG's minimal bundled headers.
+    required: false
+    default: "true"
+  tool:
+    description: EDG binary to run after installation (eccp, edgcpfe, edgcpdisp, cpfe, cdisp, edg_prelink, edg_decode, edg_munch). Leave empty to only install.
+    required: false
+    default: ""
+  args:
+    description: Whitespace-separated arguments for tool. Quotes are not re-parsed; use a separate run step when you need complex quoting.
+    required: false
+    default: ""
+  working-directory:
+    description: Directory to run tool in.
+    required: false
+    default: "."
+
+outputs:
+  edg-root:
+    description: Path to the EDG installation root.
+    value: ${{ steps.install.outputs.edg-root }}
+  edg-bin:
+    description: Path to the EDG bin directory (also added to PATH).
+    value: ${{ steps.install.outputs.edg-bin }}
+
+branding:
+  icon: package
+  color: gray-dark
+
+runs:
+  using: composite
+  steps:
+    - id: detect
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ "$(uname -s)" != "Linux" ]; then
+          echo "::error::Setup EDG Compiler only supports Linux."
+          exit 1
+        fi
+        case "$(uname -m)" in
+          x86_64|amd64) echo "arch=x64" >> "$GITHUB_OUTPUT" ;;
+          aarch64|arm64) echo "arch=arm64" >> "$GITHUB_OUTPUT" ;;
+          *)
+            echo "::error::Unsupported architecture: $(uname -m)"
+            exit 1
+            ;;
+        esac
+
+    - id: install
+      shell: bash
+      env:
+        INPUT_RELEASE: ${{ inputs.release }}
+        INPUT_REPOSITORY: ${{ inputs.repository }}
+        INPUT_SYSTEM_HEADERS: ${{ inputs.system-headers }}
+        ARCH: ${{ steps.detect.outputs.arch }}
+      run: |
+        set -euo pipefail
+
+        release="${INPUT_RELEASE:-latest}"
+        repo="${INPUT_REPOSITORY:-Zen0x7/EDGCompiler}"
+
+        case "$repo" in
+          *[!A-Za-z0-9._/-]*)
+            echo "::error::Invalid repository: $repo"
+            exit 1
+            ;;
+        esac
+        case "$release" in
+          *[!A-Za-z0-9._-]*)
+            echo "::error::Invalid release tag: $release"
+            exit 1
+            ;;
+        esac
+
+        if [ "$release" = "latest" ]; then
+          base="https://github.com/${repo}/releases/latest/download"
+        else
+          base="https://github.com/${repo}/releases/download/${release}"
+        fi
+
+        asset="edg-linux-${ARCH}.tar.gz"
+        workdir="${RUNNER_TEMP}/edg-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}"
+        rm -rf "$workdir"
+        mkdir -p "$workdir"
+
+        echo "Downloading ${base}/${asset}"
+        curl -fL --retry 3 --retry-delay 2 -sS "$base/$asset" -o "$workdir/$asset"
+        curl -fL --retry 3 --retry-delay 2 -sS "$base/SHA256SUMS" -o "$workdir/SHA256SUMS"
+
+        (
+          cd "$workdir"
+          grep -F -- "$asset" SHA256SUMS | sha256sum -c -
+        )
+
+        mkdir -p "$workdir/root"
+        tar -xzf "$workdir/$asset" -C "$workdir/root"
+        edg_home="$workdir/root/edg"
+
+        if [ ! -x "$edg_home/bin/eccp" ]; then
+          echo "::error::Package ${asset} does not contain an executable bin/eccp"
+          exit 1
+        fi
+
+        echo "edg-root=$edg_home" >> "$GITHUB_OUTPUT"
+        echo "edg-bin=$edg_home/bin" >> "$GITHUB_OUTPUT"
+        echo "$edg_home/bin" >> "$GITHUB_PATH"
+        {
+          echo "EDG_HOME=$edg_home"
+          echo "EDG_BASE=$edg_home"
+          echo "ECCP_LIBDIR=$edg_home/lib"
+          echo "ECCP=$edg_home/bin/eccp"
+          echo "CPFE=$edg_home/bin/cpfe"
+          echo "CPFE_CP=$edg_home/bin/cpfe-cp"
+          echo "EDG_MUNCH_PATH=$edg_home/bin/edg_munch"
+          echo "EDG_DECODE_PATH=$edg_home/bin/edg_decode"
+          echo "EDG_PRELINK_PATH=$edg_home/bin/edg_prelink"
+        } >> "$GITHUB_ENV"
+
+        system_headers="$(printf '%s' "${INPUT_SYSTEM_HEADERS:-true}" | tr '[:upper:]' '[:lower:]')"
+        case "$system_headers" in
+          true|1|yes|on)
+            if ! command -v python3 >/dev/null 2>&1; then
+              echo "::error::system-headers=true requires python3 on the runner."
+              exit 1
+            fi
+            if ! command -v gcc >/dev/null 2>&1; then
+              echo "::error::system-headers=true requires gcc on the runner."
+              exit 1
+            fi
+            incl="$("$edg_home/bin/edg-scrape-compiler" gcc --lang c++ includes)"
+            cincl="$("$edg_home/bin/edg-scrape-compiler" gcc --lang c includes)"
+            ver="$("$edg_home/bin/edg-scrape-compiler" gcc version)"
+            {
+              echo "EDG_USE_SYSTEM_HEADERS=1"
+              echo "EDG_GCC_INCL_SCRAPE=$incl"
+              echo "EDG_GCC_CINCL_SCRAPE=$cincl"
+              echo "EDG_GCC_VER_SCRAPE=$ver"
+            } >> "$GITHUB_ENV"
+            ;;
+          false|0|no|off)
+            echo "EDG_USE_SYSTEM_HEADERS=0" >> "$GITHUB_ENV"
+            ;;
+          *)
+            echo "::error::Invalid system-headers value: ${INPUT_SYSTEM_HEADERS}"
+            exit 1
+            ;;
+        esac
+
+    - id: run
+      if: ${{ inputs.tool != '' }}
+      shell: bash
+      env:
+        TOOL: ${{ inputs.tool }}
+        ARGS: ${{ inputs.args }}
+        WORKING_DIRECTORY: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+
+        case "$TOOL" in
+          ""|*/*|*..*|*[!A-Za-z0-9_.-]*)
+            echo "::error::Invalid tool name: $TOOL"
+            exit 1
+            ;;
+        esac
+        if [ ! -x "$EDG_HOME/bin/$TOOL" ]; then
+          echo "::error::Tool not found in EDG package: $TOOL"
+          exit 1
+        fi
+
+        cd "${WORKING_DIRECTORY:-.}"
+        set -f
+        argv=()
+        if [ -n "$ARGS" ]; then
+          read -r -a argv <<< "$ARGS"
+        fi
+        "$EDG_HOME/bin/$TOOL" "${argv[@]}"
